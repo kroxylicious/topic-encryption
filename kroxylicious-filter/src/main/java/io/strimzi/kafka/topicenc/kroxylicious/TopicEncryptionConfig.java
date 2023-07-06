@@ -1,16 +1,29 @@
 package io.strimzi.kafka.topicenc.kroxylicious;
 
+import java.time.Duration;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.apache.kafka.common.Uuid;
+
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.kroxylicious.proxy.config.BaseConfig;
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import io.strimzi.kafka.topicenc.policy.PolicyRepository;
 
-import java.util.Objects;
+import io.kroxylicious.proxy.config.BaseConfig;
 
 public class TopicEncryptionConfig extends BaseConfig {
 
     public static final String IN_MEMORY_POLICY_REPOSITORY_PROP_NAME = "inMemoryPolicyRepository";
     private final InMemoryPolicyRepositoryConfig inMemoryPolicyRepository;
+
+    @JsonIgnore
+    private static final ConcurrentHashMap<String, AsyncLoadingCache<Uuid, String>> virtualClusterToTopicUUIDToTopicNameCache = new ConcurrentHashMap<>();
+    private final ContextCacheLoader contextCacheLoader = new ContextCacheLoader();
 
     @JsonCreator
     public TopicEncryptionConfig(@JsonProperty(value = IN_MEMORY_POLICY_REPOSITORY_PROP_NAME) InMemoryPolicyRepositoryConfig inMemoryPolicyRepository) {
@@ -19,7 +32,19 @@ public class TopicEncryptionConfig extends BaseConfig {
                 + " configuration is required as it is the only PolicyRepository implementation");
     }
 
+    public ContextCacheLoader getContextCacheLoader() {
+        return contextCacheLoader;
+    }
+
     public PolicyRepository getPolicyRepository() {
         return inMemoryPolicyRepository.getPolicyRepository();
     }
+
+    public AsyncLoadingCache<Uuid, String> getTopicUuidToNameCache() {
+        return virtualClusterToTopicUUIDToTopicNameCache.computeIfAbsent("VIRTUAL_CLUSTER_ID", (key) -> Caffeine
+                .newBuilder()
+                .expireAfterAccess(Duration.ofHours(1))
+                .buildAsync(contextCacheLoader));
+    }
+
 }

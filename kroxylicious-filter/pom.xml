@@ -6,6 +6,9 @@
         <artifactId>topic-encryption</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
+    <properties>
+        <caffeine.version>3.1.6</caffeine.version>
+    </properties>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>kroxylicious-filter</artifactId>
     <name>Kroxylicious Filter</name>
@@ -45,6 +48,11 @@
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
             <version>3.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <version>${caffeine.version}</version>
         </dependency>
         <dependency>
             <groupId>io.kroxylicious.testing</groupId>

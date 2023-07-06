@@ -1,10 +1,13 @@
 package io.strimzi.kafka.topicenc.kroxylicious;
 
-import io.kroxylicious.proxy.filter.FetchRequestFilter;
-import io.kroxylicious.proxy.filter.FetchResponseFilter;
-import io.kroxylicious.proxy.filter.KrpcFilterContext;
-import io.kroxylicious.proxy.filter.MetadataResponseFilter;
-import io.strimzi.kafka.topicenc.EncryptionModule;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Predicate;
+
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.FetchRequestData;
 import org.apache.kafka.common.message.FetchResponseData;
@@ -17,11 +20,15 @@ import org.apache.kafka.common.protocol.Errors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Predicate;
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+
+import io.strimzi.kafka.topicenc.EncryptionModule;
+import io.strimzi.kafka.topicenc.common.Strings;
+
+import io.kroxylicious.proxy.filter.FetchRequestFilter;
+import io.kroxylicious.proxy.filter.FetchResponseFilter;
+import io.kroxylicious.proxy.filter.KrpcFilterContext;
+import io.kroxylicious.proxy.filter.MetadataResponseFilter;
 
 import static io.strimzi.kafka.topicenc.common.Strings.isNullOrEmpty;
 import static java.util.stream.Collectors.toSet;
@@ -30,12 +37,13 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
 
     private static final Logger log = LoggerFactory.getLogger(FetchDecryptFilter.class);
     public static final short METADATA_VERSION_SUPPORTING_TOPIC_IDS = (short) 12;
-    private final Map<Uuid, String> topicUuidToName = new HashMap<>();
 
     private final EncryptionModule module;
+    private final AsyncLoadingCache<Uuid, String> topicUuidToNameCache;
 
     public FetchDecryptFilter(TopicEncryptionConfig config) {
         module = new EncryptionModule(config.getPolicyRepository());
+        topicUuidToNameCache = config.getTopicUuidToNameCache();
     }
 
     @Override
@@ -54,8 +62,10 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
         var unresolvedTopicIds = getUnresolvedTopicIds(response);
         if (unresolvedTopicIds.isEmpty()) {
             decryptFetchResponse(header, response, context);
-        } else {
-            log.warn("We did not know all topic names for {} topic ids within a fetch response, requesting metadata and returning error response", unresolvedTopicIds.size());
+        }
+        else {
+            log.warn("We did not know all topic names for {} topic ids within a fetch response, requesting metadata and returning error response",
+                    unresolvedTopicIds.size());
             log.debug("We did not know all topic names for topic ids {} within a fetch response, requesting metadata and returning error response", unresolvedTopicIds);
             // we return an error rather than delaying the response to prevent out-of-order responses to the Consumer client.
             // The Filter API only supports synchronous work currently.
@@ -100,12 +110,13 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
             Uuid originalUuid = fetchResponse.topicId();
             String originalName = fetchResponse.topic();
             if (isNullOrEmpty(originalName)) {
-                fetchResponse.setTopic(topicUuidToName.get(originalUuid));
+                fetchResponse.setTopic(getTopicNameForUuid(originalUuid));
                 fetchResponse.setTopicId(null);
             }
             try {
                 module.decrypt(fetchResponse);
-            } catch (Exception e) {
+            }
+            catch (Exception e) {
                 log.error("Failed to decrypt a fetchResponse for topic: " + fetchResponse.topic(), e);
                 throw new RuntimeException(e);
             }
@@ -115,19 +126,42 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
         context.forwardResponse(header, response);
     }
 
-
-    private boolean isResolvable(FetchResponseData.FetchableTopicResponse fetchableTopicResponse) {
-        return !isNullOrEmpty(fetchableTopicResponse.topic()) || topicUuidToName.containsKey(fetchableTopicResponse.topicId());
-    }
-
-    private boolean isResolvable(FetchRequestData.FetchTopic fetchTopic) {
-        return !isNullOrEmpty(fetchTopic.topic()) || topicUuidToName.containsKey(fetchTopic.topicId());
+    private String getTopicNameForUuid(Uuid originalUuid) {
+        //TODO revisit error handling
+        try {
+            final CompletableFuture<String> topicNameFuture = topicUuidToNameCache.getIfPresent(originalUuid);
+            return topicNameFuture != null ? topicNameFuture.get(5, TimeUnit.SECONDS) : null;
+        }
+        catch (InterruptedException e) {
+            log.warn("Caught thread interrupt", e);
+            Thread.currentThread().interrupt();
+        }
+        catch (ExecutionException | TimeoutException e) {
+            log.warn("Failed to get ", e);
+        }
+        return null;
     }
 
     @Override
     public void onMetadataResponse(short apiVersion, ResponseHeaderData header, MetadataResponseData response, KrpcFilterContext context) {
         cacheTopicIdToName(response, apiVersion);
         context.forwardResponse(header, response);
+    }
+
+    private boolean isResolvable(FetchResponseData.FetchableTopicResponse fetchableTopicResponse) {
+        return hasTopicName(fetchableTopicResponse.topicId(), fetchableTopicResponse.topic());
+    }
+
+    private boolean isResolvable(FetchRequestData.FetchTopic fetchTopic) {
+        return hasTopicName(fetchTopic.topicId(), fetchTopic.topic());
+    }
+
+    private boolean hasTopicName(Uuid topicId, String topicName) {
+        if (!isNullOrEmpty(topicName)) {
+            final CompletableFuture<String> futureTopicName = topicUuidToNameCache.getIfPresent(topicId);
+            return futureTopicName != null && futureTopicName.isDone() && !Strings.isNullOrEmpty(futureTopicName.getNow(null));
+        }
+        return false;
     }
 
     private void cacheTopicIdToName(MetadataResponseData response, short apiVersion) {
@@ -137,11 +171,13 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
         response.topics().forEach(topic -> {
             if (topic.errorCode() == 0) {
                 if (topic.topicId() != null && !isNullOrEmpty(topic.name())) {
-                    topicUuidToName.put(topic.topicId(), topic.name());
-                } else {
+                    topicUuidToNameCache.put(topic.topicId(), CompletableFuture.completedFuture(topic.name()));
+                }
+                else {
                     log.info("not caching uuid to name because a component was null or empty, topic id {}, topic name {}", topic.topicId(), topic.name());
                 }
-            } else {
+            }
+            else {
                 log.warn("error {} on metadata request for topic id {}, topic name {}", Errors.forCode(topic.errorCode()), topic.topicId(), topic.name());
             }
         });
