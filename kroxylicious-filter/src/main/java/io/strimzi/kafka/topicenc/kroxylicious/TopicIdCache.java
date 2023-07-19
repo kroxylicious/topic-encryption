@@ -1,30 +1,28 @@
 package io.strimzi.kafka.topicenc.kroxylicious;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Future;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.message.MetadataResponseData;
+import org.apache.kafka.common.requests.MetadataRequest;
 
-import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.google.common.annotations.VisibleForTesting;
 
 import io.kroxylicious.proxy.filter.KrpcFilterContext;
 
 public class TopicIdCache {
-    private final AsyncLoadingCache<Uuid, String> topicNamesById;
+    private final AsyncCache<Uuid, String> topicNamesById;
 
     public TopicIdCache() {
-        this(Caffeine.newBuilder().expireAfterAccess(Duration.ofMinutes(10)).buildAsync((key, executor) -> {
-            //TODO something clever.
-            return null;
-        }));
+        this(Caffeine.newBuilder().expireAfterAccess(Duration.ofMinutes(10)).buildAsync());
     }
 
-    TopicIdCache(AsyncLoadingCache<Uuid, String> topicNamesById) {
+    TopicIdCache(AsyncCache<Uuid, String> topicNamesById) {
         this.topicNamesById = topicNamesById;
     }
 
@@ -44,6 +42,21 @@ public class TopicIdCache {
     }
 
     public void resolveTopicNames(KrpcFilterContext context, Set<Uuid> topicIdsToResolve) {
-
+        final MetadataRequest.Builder builder = new MetadataRequest.Builder(List.copyOf(topicIdsToResolve));
+        final MetadataRequest metadataRequest = builder.build(builder.latestAllowedVersion());
+        topicIdsToResolve.forEach(uuid -> topicNamesById.put(uuid, new CompletableFuture<>()));
+        context.<MetadataResponseData> sendRequest(metadataRequest.version(), metadataRequest.data())
+                .whenComplete((metadataResponseData, throwable) -> {
+                    if (throwable != null) {
+                        //TODO something sensible
+                    }
+                    else {
+                        metadataResponseData.topics()
+                                .forEach(metadataResponseTopic -> Objects.requireNonNull(topicNamesById.getIfPresent(metadataResponseTopic.topicId()))
+                                        .complete(metadataResponseTopic.name()));
+                        //If we were to get null from getIfPresent it would imply we got a result for a topic we didn't expect
+                    }
+                });
     }
+
 }
