@@ -2,7 +2,6 @@ package io.strimzi.kafka.topicenc.kroxylicious;
 
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -11,7 +10,6 @@ import java.util.function.Predicate;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.FetchRequestData;
 import org.apache.kafka.common.message.FetchResponseData;
-import org.apache.kafka.common.message.MetadataRequestData;
 import org.apache.kafka.common.message.MetadataResponseData;
 import org.apache.kafka.common.message.MetadataResponseDataJsonConverter;
 import org.apache.kafka.common.message.RequestHeaderData;
@@ -20,10 +18,7 @@ import org.apache.kafka.common.protocol.Errors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
-
 import io.strimzi.kafka.topicenc.EncryptionModule;
-import io.strimzi.kafka.topicenc.common.Strings;
 
 import io.kroxylicious.proxy.filter.FetchRequestFilter;
 import io.kroxylicious.proxy.filter.FetchResponseFilter;
@@ -39,7 +34,7 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
     public static final short METADATA_VERSION_SUPPORTING_TOPIC_IDS = (short) 12;
 
     private final EncryptionModule module;
-    private final AsyncLoadingCache<Uuid, String> topicUuidToNameCache;
+    private final TopicIdCache topicUuidToNameCache;
 
     public FetchDecryptFilter(TopicEncryptionConfig config) {
         module = new EncryptionModule(config.getPolicyRepository());
@@ -93,16 +88,7 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
     }
 
     private void resolveAndCache(KrpcFilterContext context, Set<Uuid> topicIdsToResolve) {
-        MetadataRequestData request = new MetadataRequestData();
-        topicIdsToResolve.forEach(uuid -> {
-            MetadataRequestData.MetadataRequestTopic e = new MetadataRequestData.MetadataRequestTopic();
-            e.setTopicId(uuid);
-            request.topics().add(e);
-        });
-        // if the client is sending topic ids we will assume the broker can support at least the lowest metadata apiVersion
-        // supporting topicIds
-        CompletionStage<MetadataResponseData> stage = context.sendRequest(METADATA_VERSION_SUPPORTING_TOPIC_IDS, request);
-        stage.thenAccept(response -> cacheTopicIdToName(response, METADATA_VERSION_SUPPORTING_TOPIC_IDS));
+        topicUuidToNameCache.resolveTopicNames(context, topicIdsToResolve);
     }
 
     private void decryptFetchResponse(ResponseHeaderData header, FetchResponseData response, KrpcFilterContext context) {
@@ -129,7 +115,7 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
     private String getTopicNameForUuid(Uuid originalUuid) {
         //TODO revisit error handling
         try {
-            final CompletableFuture<String> topicNameFuture = topicUuidToNameCache.getIfPresent(originalUuid);
+            final CompletableFuture<String> topicNameFuture = topicUuidToNameCache.getTopicName(originalUuid);
             return topicNameFuture != null ? topicNameFuture.get(5, TimeUnit.SECONDS) : null;
         }
         catch (InterruptedException e) {
@@ -157,11 +143,7 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
     }
 
     private boolean hasTopicName(Uuid topicId, String topicName) {
-        if (!isNullOrEmpty(topicName)) {
-            final CompletableFuture<String> futureTopicName = topicUuidToNameCache.getIfPresent(topicId);
-            return futureTopicName != null && futureTopicName.isDone() && !Strings.isNullOrEmpty(futureTopicName.getNow(null));
-        }
-        return false;
+        return !isNullOrEmpty(topicName) || topicUuidToNameCache.hasResolvedTopic(topicId);
     }
 
     private void cacheTopicIdToName(MetadataResponseData response, short apiVersion) {
@@ -169,17 +151,6 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
             log.trace("received metadata response: {}", MetadataResponseDataJsonConverter.write(response, apiVersion));
         }
         response.topics().forEach(topic -> {
-            if (topic.errorCode() == 0) {
-                if (topic.topicId() != null && !isNullOrEmpty(topic.name())) {
-                    topicUuidToNameCache.put(topic.topicId(), CompletableFuture.completedFuture(topic.name()));
-                }
-                else {
-                    log.info("not caching uuid to name because a component was null or empty, topic id {}, topic name {}", topic.topicId(), topic.name());
-                }
-            }
-            else {
-                log.warn("error {} on metadata request for topic id {}, topic name {}", Errors.forCode(topic.errorCode()), topic.topicId(), topic.name());
-            }
         });
     }
 }

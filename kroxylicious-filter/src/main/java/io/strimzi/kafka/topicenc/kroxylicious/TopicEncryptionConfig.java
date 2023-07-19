@@ -22,7 +22,7 @@ public class TopicEncryptionConfig extends BaseConfig {
     private final InMemoryPolicyRepositoryConfig inMemoryPolicyRepository;
 
     @JsonIgnore
-    private static final ConcurrentHashMap<String, AsyncLoadingCache<Uuid, String>> virtualClusterToTopicUUIDToTopicNameCache = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, TopicIdCache> virtualClusterToTopicUUIDToTopicNameCache = new ConcurrentHashMap<>();
     private final ContextCacheLoader contextCacheLoader = new ContextCacheLoader();
 
     @JsonCreator
@@ -40,11 +40,8 @@ public class TopicEncryptionConfig extends BaseConfig {
         return inMemoryPolicyRepository.getPolicyRepository();
     }
 
-    public AsyncLoadingCache<Uuid, String> getTopicUuidToNameCache() {
-        return virtualClusterToTopicUUIDToTopicNameCache.computeIfAbsent("VIRTUAL_CLUSTER_ID", (key) -> Caffeine
-                .newBuilder()
-                .expireAfterAccess(Duration.ofHours(1))
-                .buildAsync(contextCacheLoader));
+    public TopicIdCache getTopicUuidToNameCache() {
+        return virtualClusterToTopicUUIDToTopicNameCache.computeIfAbsent("VIRTUAL_CLUSTER_ID", (key) -> new TopicIdCache());
     }
 
 }

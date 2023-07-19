@@ -8,6 +8,7 @@
     </parent>
     <properties>
         <caffeine.version>3.1.6</caffeine.version>
+        <assertj.version>3.24.2</assertj.version>
     </properties>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>kroxylicious-filter</artifactId>
@@ -82,6 +83,12 @@
             <groupId>org.testcontainers</groupId>
             <artifactId>vault</artifactId>
             <version>1.18.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
