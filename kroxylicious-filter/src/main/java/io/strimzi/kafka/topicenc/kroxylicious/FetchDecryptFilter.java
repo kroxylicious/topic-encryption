@@ -2,9 +2,6 @@ package io.strimzi.kafka.topicenc.kroxylicious;
 
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Predicate;
 
 import org.apache.kafka.common.Uuid;
@@ -114,18 +111,8 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
 
     private String getTopicNameForUuid(Uuid originalUuid) {
         //TODO revisit error handling
-        try {
-            final CompletableFuture<String> topicNameFuture = topicUuidToNameCache.getTopicName(originalUuid);
-            return topicNameFuture != null ? topicNameFuture.get(5, TimeUnit.SECONDS) : null;
-        }
-        catch (InterruptedException e) {
-            log.warn("Caught thread interrupt", e);
-            Thread.currentThread().interrupt();
-        }
-        catch (ExecutionException | TimeoutException e) {
-            log.warn("Failed to get ", e);
-        }
-        return null;
+        final CompletableFuture<String> topicNameFuture = topicUuidToNameCache.getTopicName(originalUuid);
+        return topicNameFuture != null ? topicNameFuture.getNow(null) : null;
     }
 
     @Override
