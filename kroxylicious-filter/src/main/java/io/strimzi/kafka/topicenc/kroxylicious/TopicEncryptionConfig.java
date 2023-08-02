@@ -3,7 +3,6 @@ package io.strimzi.kafka.topicenc.kroxylicious;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.kroxylicious.proxy.config.BaseConfig;
-import io.strimzi.kafka.topicenc.policy.PolicyRepository;
 
 import java.util.Objects;
 
@@ -19,7 +18,7 @@ public class TopicEncryptionConfig extends BaseConfig {
                 + " configuration is required as it is the only PolicyRepository implementation");
     }
 
-    public PolicyRepository getPolicyRepository() {
-        return inMemoryPolicyRepository.getPolicyRepository();
+    public EncrypterDecrypter encrypterDecrypter() {
+        return inMemoryPolicyRepository.encrypterDecrypter();
     }
 }

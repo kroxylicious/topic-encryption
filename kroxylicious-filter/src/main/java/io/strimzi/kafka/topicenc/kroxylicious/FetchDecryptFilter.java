@@ -4,7 +4,6 @@ import io.kroxylicious.proxy.filter.FetchRequestFilter;
 import io.kroxylicious.proxy.filter.FetchResponseFilter;
 import io.kroxylicious.proxy.filter.KrpcFilterContext;
 import io.kroxylicious.proxy.filter.MetadataResponseFilter;
-import io.strimzi.kafka.topicenc.EncryptionModule;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.FetchRequestData;
 import org.apache.kafka.common.message.FetchResponseData;
@@ -32,10 +31,10 @@ public class FetchDecryptFilter implements FetchRequestFilter, FetchResponseFilt
     public static final short METADATA_VERSION_SUPPORTING_TOPIC_IDS = (short) 12;
     private final Map<Uuid, String> topicUuidToName = new HashMap<>();
 
-    private final EncryptionModule module;
+    private final EncrypterDecrypter module;
 
     public FetchDecryptFilter(TopicEncryptionConfig config) {
-        module = new EncryptionModule(config.getPolicyRepository());
+        module = config.encrypterDecrypter();
     }
 
     @Override

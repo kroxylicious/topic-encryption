@@ -2,7 +2,6 @@ package io.strimzi.kafka.topicenc.kroxylicious;
 
 import io.kroxylicious.proxy.filter.KrpcFilterContext;
 import io.kroxylicious.proxy.filter.ProduceRequestFilter;
-import io.strimzi.kafka.topicenc.EncryptionModule;
 import org.apache.kafka.common.message.ProduceRequestData;
 import org.apache.kafka.common.message.ProduceResponseData;
 import org.apache.kafka.common.message.RequestHeaderData;
@@ -15,10 +14,10 @@ public class ProduceEncryptFilter implements ProduceRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(ProduceEncryptFilter.class);
 
-    private final EncryptionModule module;
+    private final EncrypterDecrypter module;
 
     public ProduceEncryptFilter(TopicEncryptionConfig config) {
-        module = new EncryptionModule(config.getPolicyRepository());
+        module = config.encrypterDecrypter();
     }
 
     @Override
